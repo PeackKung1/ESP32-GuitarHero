@@ -255,8 +255,8 @@ void loop() {
       potValue,
       0,
       4095,
-      32767,
-      0
+      -32768,
+      32767
     );
 
     bleGamepad.setX(axisValue);
