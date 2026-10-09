@@ -54,6 +54,11 @@ bool lastPressed[7] = {
 bool wasConnected = false;
 
 unsigned long lastReportTime = 0;
+unsigned long lastPotPrintTime = 0;
+unsigned long potTestStartTime = 0;
+int potTestMin = 4095;
+int potTestMax = 0;
+bool potTestReported = false;
 
 
 // =====================================================
@@ -128,6 +133,9 @@ void setup() {
   // ADC 12-bit
   analogReadResolution(12);
 
+  potTestStartTime = millis();
+  Serial.println("ทดสอบ Poten: ต่อวงจรให้ครบ แล้วเลื่อนจากสุดด้านหนึ่งไปอีกด้านภายใน 5 วินาที");
+
 
   // เริ่ม Bluetooth Gamepad
   bleGamepad.begin();
@@ -141,6 +149,34 @@ void setup() {
 // Loop
 // =====================================================
 void loop() {
+
+  int potValue = readSlidePot();
+
+  if (!potTestReported) {
+    potTestMin = min(potTestMin, potValue);
+    potTestMax = max(potTestMax, potValue);
+
+    if (millis() - potTestStartTime >= 5000) {
+      Serial.print("ช่วงค่าที่อ่านได้: ");
+      Serial.print(potTestMin);
+      Serial.print(" - ");
+      Serial.println(potTestMax);
+
+      if (potTestMax - potTestMin >= 500) {
+        Serial.println("ผลทดสอบ Poten: เชื่อมต่อและตอบสนอง (ค่ามีการเปลี่ยนแปลง)");
+      } else {
+        Serial.println("ผลทดสอบ Poten: ไม่พบการเชื่อมต่อ/การเปลี่ยนแปลง ตรวจสายและเลื่อน Poten ให้สุดช่วง");
+      }
+
+      potTestReported = true;
+    }
+  }
+
+  if (millis() - lastPotPrintTime >= 200) {
+    Serial.print("Poten: ");
+    Serial.println(potValue);
+    lastPotPrintTime = millis();
+  }
 
   // ===================================================
   // Bluetooth Connected
@@ -215,8 +251,6 @@ void loop() {
     // =================================================
     // Slide Potentiometer
     // =================================================
-    int potValue = readSlidePot();
-
     int axisValue = map(
       potValue,
       0,
