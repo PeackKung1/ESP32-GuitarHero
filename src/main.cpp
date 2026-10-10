@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include <BleGamepad.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 
 BleGamepad bleGamepad("Guitar Controller", "ESP32", 100);
 
@@ -35,6 +37,14 @@ const uint8_t comPin = 32;
 
 const int SLIDE_POT_PIN = 34;
 
+// Poten ทำงานแบบปุ่ม: ปล่อย ~2900, กดสุด ~3200
+// ค่าสูงกว่าตำแหน่งปล่อยเกิน PRESS = กด, กลับมาต่ำกว่า RELEASE = ปล่อย
+// ตำแหน่งปล่อยเลื่อนตามไฟเลี้ยง จึงปรับตามค่าที่อ่านได้ตลอดแทนค่าตายตัว
+const uint8_t POT_BUTTON = BUTTON_8;
+const int POT_PRESS_DELTA = 150;
+const int POT_RELEASE_DELTA = 90;
+const unsigned long POT_MAX_HOLD_MS = 8000;   // กดค้างนานกว่านี้ = ตั้งตำแหน่งปล่อยใหม่
+
 const unsigned long DEBOUNCE_MS = 25;
 const unsigned long REPORT_INTERVAL_MS = 20;
 
@@ -59,6 +69,10 @@ unsigned long potTestStartTime = 0;
 int potTestMin = 4095;
 int potTestMax = 0;
 bool potTestReported = false;
+
+float potRestValue = 0;
+bool potPressed = false;
+unsigned long potPressTime = 0;
 
 
 // =====================================================
@@ -101,9 +115,38 @@ int readSlidePot() {
 
 
 // =====================================================
+// ตรวจว่า Poten ถูกกดหรือไม่ พร้อมปรับตำแหน่งปล่อย
+// ตามลงเร็ว ตามขึ้นช้าเฉพาะตอนไม่ได้กด
+// =====================================================
+bool potIsPressed(int potValue) {
+
+  if (potValue < potRestValue) {
+    potRestValue += (potValue - potRestValue) * 0.05f;
+  } else if (!potPressed) {
+    potRestValue += (potValue - potRestValue) * 0.002f;
+  }
+
+  if (potPressed && millis() - potPressTime >= POT_MAX_HOLD_MS) {
+    potRestValue = potValue;
+  }
+
+  int potDelta = potValue - (int)potRestValue;
+
+  if (potPressed) {
+    return potDelta > POT_RELEASE_DELTA;
+  }
+
+  return potDelta > POT_PRESS_DELTA;
+}
+
+
+// =====================================================
 // Setup
 // =====================================================
 void setup() {
+
+  // ปิด Brownout Detector: ไฟตกชั่วขณะตอนเริ่ม Bluetooth ทำให้บอร์ดรีบูตวน
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
 
   Serial.begin(115200);
 
@@ -132,6 +175,8 @@ void setup() {
 
   // ADC 12-bit
   analogReadResolution(12);
+
+  potRestValue = readSlidePot();
 
   potTestStartTime = millis();
   Serial.println("ทดสอบ Poten: ต่อวงจรให้ครบ แล้วเลื่อนจากสุดด้านหนึ่งไปอีกด้านภายใน 5 วินาที");
@@ -174,7 +219,9 @@ void loop() {
 
   if (millis() - lastPotPrintTime >= 200) {
     Serial.print("Poten: ");
-    Serial.println(potValue);
+    Serial.print(potValue);
+    Serial.print("  ปล่อย: ");
+    Serial.println((int)potRestValue);
     lastPotPrintTime = millis();
   }
 
@@ -251,15 +298,28 @@ void loop() {
     // =================================================
     // Slide Potentiometer
     // =================================================
-    int axisValue = map(
-      potValue,
-      0,
-      4095,
-      -32768,
-      32767
-    );
+    bool potNow = potIsPressed(potValue);
 
-    bleGamepad.setX(axisValue);
+    if (potNow) {
+      bleGamepad.press(POT_BUTTON);
+    } else {
+      bleGamepad.release(POT_BUTTON);
+    }
+
+    if (potNow != potPressed) {
+
+      if (potNow) {
+        Serial.print(">>> SWITCH PRESSED: Poten [GPIO ");
+      } else {
+        Serial.print("<<< SWITCH RELEASED: Poten [GPIO ");
+      }
+
+      Serial.print(SLIDE_POT_PIN);
+      Serial.println("]");
+
+      potPressed = potNow;
+      potPressTime = millis();
+    }
 
 
     // =================================================
