@@ -6,117 +6,101 @@
 BleGamepad bleGamepad("Guitar Controller", "ESP32", 100);
 
 // =====================================================
-// ลำดับขา:
-// เขียว แดง เหลือง น้ำเงิน ส้ม ดีดขึ้น ดีดลง
+// ปุ่ม (INPUT_PULLUP: LOW = กด, HIGH = ปล่อย)
 // =====================================================
-const uint8_t buttonPins[7] = {
-  23, 25, 27, 26, 33, 17, 16
+struct Button {
+  uint8_t pin;
+  uint8_t gamepadButton;
+  const char* name;
+  int lastReading;
+  int stableState;
+  unsigned long lastChangeTime;
+  bool pressed;
 };
 
-const uint8_t gamepadButtons[7] = {
-  BUTTON_1,
-  BUTTON_2,
-  BUTTON_3,
-  BUTTON_4,
-  BUTTON_5,
-  BUTTON_6,
-  BUTTON_7
+Button buttons[] = {
+  {23, BUTTON_1, "เขียว"},
+  {25, BUTTON_2, "แดง"},
+  {27, BUTTON_3, "เหลือง"},
+  {26, BUTTON_4, "น้ำเงิน"},
+  {33, BUTTON_5, "ส้ม"},
+  {17, BUTTON_6, "ดีดขึ้น"},
+  {16, BUTTON_7, "ดีดลง"}
 };
 
-const char* buttonNames[7] = {
-  "เขียว",
-  "แดง",
-  "เหลือง",
-  "น้ำเงิน",
-  "ส้ม",
-  "ดีดขึ้น",
-  "ดีดลง"
-};
+const int BUTTON_COUNT = sizeof(buttons) / sizeof(buttons[0]);
 
-const uint8_t comPin = 32;
-
-const int SLIDE_POT_PIN = 34;
-
-// Poten ทำงานแบบปุ่ม: ปล่อย ~2900, กดสุด ~3200
-// ค่าสูงกว่าตำแหน่งปล่อยเกิน PRESS = กด, กลับมาต่ำกว่า RELEASE = ปล่อย
-// ตำแหน่งปล่อยเลื่อนตามไฟเลี้ยง จึงปรับตามค่าที่อ่านได้ตลอดแทนค่าตายตัว
-const uint8_t POT_BUTTON = BUTTON_8;
-const int POT_PRESS_DELTA = 150;
-const int POT_RELEASE_DELTA = 90;
-const unsigned long POT_MAX_HOLD_MS = 8000;   // กดค้างนานกว่านี้ = ตั้งตำแหน่งปล่อยใหม่
+const uint8_t COM_PIN = 32;
 
 const unsigned long DEBOUNCE_MS = 25;
 const unsigned long REPORT_INTERVAL_MS = 20;
 
-struct ButtonState {
-  int lastReading;
-  int stableState;
-  unsigned long lastChangeTime;
-};
+// =====================================================
+// Poten (คันโยก) ทำงานแบบปุ่ม: ปล่อย ~2900, กดสุด ~3200
+// ค่าสูงกว่าตำแหน่งปล่อยเกิน PRESS = กด, กลับมาต่ำกว่า RELEASE = ปล่อย
+// ตำแหน่งปล่อยเลื่อนตามไฟเลี้ยง จึงปรับตามค่าที่อ่านได้ตลอดแทนค่าตายตัว
+// =====================================================
+const uint8_t POT_PIN = 34;
+const uint8_t POT_BUTTON = BUTTON_8;
+const char* POT_NAME = "Poten";
 
-ButtonState buttons[7];
+const int POT_SAMPLES = 5;
+const int POT_PRESS_DELTA = 150;
+const int POT_RELEASE_DELTA = 90;
+const unsigned long POT_MAX_HOLD_MS = 8000;   // กดค้างนานกว่านี้ = ตั้งตำแหน่งปล่อยใหม่
+const unsigned long POT_PRINT_INTERVAL_MS = 200;
 
-bool lastPressed[7] = {
-  false, false, false, false,
-  false, false, false
-};
+float potRestValue = 0;
+bool potPressed = false;
+unsigned long potPressTime = 0;
+bool potLastReading = false;
+unsigned long potLastChangeTime = 0;
 
 bool wasConnected = false;
 
 unsigned long lastReportTime = 0;
 unsigned long lastPotPrintTime = 0;
-unsigned long potTestStartTime = 0;
-int potTestMin = 4095;
-int potTestMax = 0;
-bool potTestReported = false;
-
-float potRestValue = 0;
-bool potPressed = false;
-unsigned long potPressTime = 0;
 
 
 // =====================================================
 // อ่านปุ่มพร้อม Debounce
 // =====================================================
-bool buttonIsPressed(int index) {
+bool buttonIsPressed(Button& button) {
 
-  int reading = digitalRead(buttonPins[index]);
+  int reading = digitalRead(button.pin);
 
-  if (reading != buttons[index].lastReading) {
-    buttons[index].lastReading = reading;
-    buttons[index].lastChangeTime = millis();
+  if (reading != button.lastReading) {
+    button.lastReading = reading;
+    button.lastChangeTime = millis();
   }
 
-  if (millis() - buttons[index].lastChangeTime >= DEBOUNCE_MS) {
-    buttons[index].stableState = buttons[index].lastReading;
+  if (millis() - button.lastChangeTime >= DEBOUNCE_MS) {
+    button.stableState = button.lastReading;
   }
 
-  // INPUT_PULLUP:
-  // LOW = กด
-  // HIGH = ปล่อย
-  return buttons[index].stableState == LOW;
+  return button.stableState == LOW;
 }
 
 
 // =====================================================
-// อ่าน Slide Potentiometer
+// อ่าน Poten (เฉลี่ยหลายค่า)
 // =====================================================
-int readSlidePot() {
+int readPot() {
 
   int total = 0;
 
-  for (int i = 0; i < 5; i++) {
-    total += analogRead(SLIDE_POT_PIN);
+  for (int i = 0; i < POT_SAMPLES; i++) {
+    total += analogRead(POT_PIN);
     delayMicroseconds(300);
   }
 
-  return total / 5;
+  return total / POT_SAMPLES;
 }
 
 
 // =====================================================
-// ตรวจว่า Poten ถูกกดหรือไม่ พร้อมปรับตำแหน่งปล่อย
-// ตามลงเร็ว ตามขึ้นช้าเฉพาะตอนไม่ได้กด
+// ตรวจว่า Poten ถูกกดหรือไม่ พร้อมปรับตำแหน่งปล่อยและ Debounce
+// ตำแหน่งปล่อย: ตามลงเร็ว ตามขึ้นช้าเฉพาะตอนไม่ได้กด
 // =====================================================
 bool potIsPressed(int potValue) {
 
@@ -132,11 +116,45 @@ bool potIsPressed(int potValue) {
 
   int potDelta = potValue - (int)potRestValue;
 
-  if (potPressed) {
-    return potDelta > POT_RELEASE_DELTA;
+  bool reading = potDelta > (potPressed ? POT_RELEASE_DELTA : POT_PRESS_DELTA);
+
+  if (reading != potLastReading) {
+    potLastReading = reading;
+    potLastChangeTime = millis();
   }
 
-  return potDelta > POT_PRESS_DELTA;
+  // ค่ากระตุกจากไฟเลี้ยงยาวแค่ ~10 ms จึงต้องนิ่งครบ DEBOUNCE_MS ก่อนเปลี่ยนสถานะ
+  if (millis() - potLastChangeTime >= DEBOUNCE_MS) {
+    return reading;
+  }
+
+  return potPressed;
+}
+
+
+// =====================================================
+// ส่งสถานะปุ่มไป Bluetooth Gamepad
+// =====================================================
+void sendButton(uint8_t gamepadButton, bool pressed) {
+
+  if (pressed) {
+    bleGamepad.press(gamepadButton);
+  } else {
+    bleGamepad.release(gamepadButton);
+  }
+}
+
+
+// =====================================================
+// แจ้งเตือนทาง Serial เมื่อสถานะปุ่มเปลี่ยน
+// =====================================================
+void printSwitchEvent(const char* name, uint8_t pin, bool pressed) {
+
+  Serial.print(pressed ? ">>> SWITCH PRESSED: " : "<<< SWITCH RELEASED: ");
+  Serial.print(name);
+  Serial.print(" [GPIO ");
+  Serial.print(pin);
+  Serial.println("]");
 }
 
 
@@ -157,32 +175,24 @@ void setup() {
   Serial.println("     ESP32 Guitar Controller");
   Serial.println("==============================");
 
-  pinMode(comPin, OUTPUT);
-  digitalWrite(comPin, LOW);
+  pinMode(COM_PIN, OUTPUT);
+  digitalWrite(COM_PIN, LOW);
 
-  // ตั้งค่าปุ่ม
-  for (int i = 0; i < 7; i++) {
+  for (Button& button : buttons) {
 
-    pinMode(buttonPins[i], INPUT_PULLUP);
+    pinMode(button.pin, INPUT_PULLUP);
 
-    buttons[i].lastReading = digitalRead(buttonPins[i]);
-    buttons[i].stableState = buttons[i].lastReading;
-    buttons[i].lastChangeTime = millis();
-
-    lastPressed[i] = false;
+    button.lastReading = digitalRead(button.pin);
+    button.stableState = button.lastReading;
+    button.lastChangeTime = millis();
+    button.pressed = false;
   }
-
 
   // ADC 12-bit
   analogReadResolution(12);
 
-  potRestValue = readSlidePot();
+  potRestValue = readPot();
 
-  potTestStartTime = millis();
-  Serial.println("ทดสอบ Poten: ต่อวงจรให้ครบ แล้วเลื่อนจากสุดด้านหนึ่งไปอีกด้านภายใน 5 วินาที");
-
-
-  // เริ่ม Bluetooth Gamepad
   bleGamepad.begin();
 
   Serial.println("Bluetooth Gamepad Starting...");
@@ -195,39 +205,18 @@ void setup() {
 // =====================================================
 void loop() {
 
-  int potValue = readSlidePot();
+  int potValue = readPot();
 
-  if (!potTestReported) {
-    potTestMin = min(potTestMin, potValue);
-    potTestMax = max(potTestMax, potValue);
+  if (millis() - lastPotPrintTime >= POT_PRINT_INTERVAL_MS) {
 
-    if (millis() - potTestStartTime >= 5000) {
-      Serial.print("ช่วงค่าที่อ่านได้: ");
-      Serial.print(potTestMin);
-      Serial.print(" - ");
-      Serial.println(potTestMax);
-
-      if (potTestMax - potTestMin >= 500) {
-        Serial.println("ผลทดสอบ Poten: เชื่อมต่อและตอบสนอง (ค่ามีการเปลี่ยนแปลง)");
-      } else {
-        Serial.println("ผลทดสอบ Poten: ไม่พบการเชื่อมต่อ/การเปลี่ยนแปลง ตรวจสายและเลื่อน Poten ให้สุดช่วง");
-      }
-
-      potTestReported = true;
-    }
-  }
-
-  if (millis() - lastPotPrintTime >= 200) {
     Serial.print("Poten: ");
     Serial.print(potValue);
     Serial.print("  ปล่อย: ");
     Serial.println((int)potRestValue);
+
     lastPotPrintTime = millis();
   }
 
-  // ===================================================
-  // Bluetooth Connected
-  // ===================================================
   if (bleGamepad.isConnected()) {
 
     if (!wasConnected) {
@@ -238,116 +227,44 @@ void loop() {
       wasConnected = true;
     }
 
+    // ปุ่ม
+    for (Button& button : buttons) {
 
-    // =================================================
-    // อ่านปุ่ม
-    // =================================================
-    for (int i = 0; i < 7; i++) {
+      bool pressed = buttonIsPressed(button);
 
-      bool pressed = buttonIsPressed(i);
+      sendButton(button.gamepadButton, pressed);
 
-
-      // -----------------------------------------------
-      // ส่งปุ่มไป Bluetooth Gamepad
-      // -----------------------------------------------
-      if (pressed) {
-        bleGamepad.press(gamepadButtons[i]);
-      } else {
-        bleGamepad.release(gamepadButtons[i]);
-      }
-
-
-      // -----------------------------------------------
-      // แจ้งเตือนเมื่อสถานะเปลี่ยน
-      // -----------------------------------------------
-      if (pressed != lastPressed[i]) {
-
-        if (pressed) {
-
-          // ===========================================
-          // กดปุ่ม
-          // ===========================================
-          Serial.print(">>> SWITCH PRESSED: ");
-          Serial.print(buttonNames[i]);
-
-          Serial.print(" [GPIO ");
-          Serial.print(buttonPins[i]);
-          Serial.println("]");
-
-
-        } else {
-
-          // ===========================================
-          // ปล่อยปุ่ม
-          // ===========================================
-          Serial.print("<<< SWITCH RELEASED: ");
-          Serial.print(buttonNames[i]);
-
-          Serial.print(" [GPIO ");
-          Serial.print(buttonPins[i]);
-          Serial.println("]");
-        }
-
-
-        // จำสถานะล่าสุด
-        lastPressed[i] = pressed;
+      if (pressed != button.pressed) {
+        printSwitchEvent(button.name, button.pin, pressed);
+        button.pressed = pressed;
       }
     }
 
-
-    // =================================================
-    // Slide Potentiometer
-    // =================================================
+    // Poten
     bool potNow = potIsPressed(potValue);
 
-    if (potNow) {
-      bleGamepad.press(POT_BUTTON);
-    } else {
-      bleGamepad.release(POT_BUTTON);
-    }
+    sendButton(POT_BUTTON, potNow);
 
     if (potNow != potPressed) {
-
-      if (potNow) {
-        Serial.print(">>> SWITCH PRESSED: Poten [GPIO ");
-      } else {
-        Serial.print("<<< SWITCH RELEASED: Poten [GPIO ");
-      }
-
-      Serial.print(SLIDE_POT_PIN);
-      Serial.println("]");
-
+      printSwitchEvent(POT_NAME, POT_PIN, potNow);
       potPressed = potNow;
       potPressTime = millis();
     }
 
-
-    // =================================================
     // ส่ง Report
-    // =================================================
     if (millis() - lastReportTime >= REPORT_INTERVAL_MS) {
-
       bleGamepad.sendReport();
-
       lastReportTime = millis();
     }
 
+  } else if (wasConnected) {
 
-  } else {
+    Serial.println();
+    Serial.println(">>> Bluetooth Disconnected <<<");
+    Serial.println("Waiting for connection...");
 
-    // =================================================
-    // Bluetooth Disconnected
-    // =================================================
-    if (wasConnected) {
-
-      Serial.println();
-      Serial.println(">>> Bluetooth Disconnected <<<");
-      Serial.println("Waiting for connection...");
-
-      wasConnected = false;
-    }
+    wasConnected = false;
   }
-
 
   delay(5);
 }
